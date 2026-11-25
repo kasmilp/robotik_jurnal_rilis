@@ -1,0 +1,585 @@
+
+===== PAGE 1 =====
+Open-Set Evaluation of a Hand-Gesture Robot Control Interface on
+an Edge Device:
+How Often Does the Robot Move When Nobody Asked?
+Kelompok 3
+Teknik Informatika, Universitas Hasanuddin
+Draft 1 — 1 October 2026
+Abstract
+Vision-based hand-gesture interfaces for robot control are routinely evaluated only while
+a command is being given: accuracy is measured on curated samples that each contain one
+valid gesture. In operation, most of the time no command is being given, and an error in
+that condition is an uncommanded motion rather than a misclassification. We propose an
+open-set, streaming evaluation protocol whose headline metric is the number of false activations
+per minute during non-command activity, and we use it to compare three input-rejection
+strategies — confidence thresholding, temporal k-of-n voting and wake-gesture gating — on
+an NVIDIA Jetson Orin Nano. The classifier is a small multilayer perceptron over 21 hand
+keypoints, kept strictly separate from the decision layer so that every rejection configuration is
+evaluated offline on identical recordings. On the HANDS dataset the classifier reaches 96.22%
+leave-one-subject-out accuracy, whereas a random frame-level split of the same data reports
+99.68%, hiding an error rate 11.7 times higher. Per-subject confusion analysis shows that this
+cross-subject error is concentrated in a few gestures, and selecting the command vocabulary
+from it reduces command-level error from 2.19% to 0.66%. [pending: one sentence each
+on false-activation rate of the baseline, the voting-vs-threshold comparison, and the cost of
+wake-gesture gating, once the participant sessions are recorded].
+1
+Introduction
+Touchless communication between people and robots matters more as robotic systems leave
+controlled production cells for unstructured workplaces. Conventional interfaces such as joysticks,
+keyboards or teach pendants require physical contact and operator training, which is impractical
+when the operator’s hands are occupied or contact is not possible. Vision-based hand gestures are
+an intuitive alternative: the operator issues commands with hand signs seen by a camera, with no
+body-worn sensor and no physical controller.
+The technical feasibility of this on edge hardware is no longer an open question. Landmark-
+based gesture-to-command pipelines have been demonstrated for collaborative-robot path definition
+on Jetson Nano units [4], for steering a ROS-based vehicle [6], and as an integrated perception–
+decision–control framework running locally on a Jetson Orin Nano and a Raspberry Pi 5, evaluated
+for gesture recognition reliability and runtime performance [5]. Showing once more that gesture
+recognition runs in real time on an edge device is therefore not a contribution.
+One assumption is nearly universal in that literature and almost never tested: the system is
+evaluated only while a command is actually being given. Standard protocols measure classification
+accuracy on curated images or video segments, each guaranteed to contain one valid command
+gesture. In real operation most of the time is spent in the opposite condition — the operator
+walks, talks while moving their hands, interacts with a colleague, or adjusts their clothing in front
+of the camera. For an active mobile robot an error here is not a drop in accuracy; it is a motion
+nobody commanded.
+1
+
+===== PAGE 2 =====
+Two lines of evidence show the problem is real and unsolved. First, the SHREC 2022 contest
+on online gesture detection from 3D hand-pose sequences, in which gestures are interleaved with
+non-significant motions and the evaluation includes latency and false positives, concluded that
+further research is needed to reduce recognition errors [8]. Second, in myoelectric control, which
+faces the same structural problem, participants performing ordinary daily activities triggered a
+command class more often than not, and — more importantly — confidence-based rejection was
+only slightly better than chance at deciding whether an input should be rejected [9]. The remedy
+most often assumed to be adequate for out-of-set input fails when it is tested systematically.
+The evaluation community has begun to question the measurement protocol itself. A recent
+latency-aware evaluation framework for event-driven vision argues that conventional evaluation
+ignores perception latency, which opens a gap between benchmark results and real-world perfor-
+mance, and reports that latency degrades online accuracy by more than 50% [11]. The argument
+was developed for neuromorphic vision, but it applies equally to a gesture interface for robot
+control, where perception delay becomes actuation delay.
+This work therefore moves the research question from whether gesture control can run on an
+edge device to how reliable the interface is when no command is given, and what it costs to make
+it reliable. Our contributions are:
+1. An open-set, streaming evaluation protocol for gesture-based robot control that reports,
+alongside classification accuracy, the false-activation rate per minute during non-command
+sessions — a metric that, as far as we have found, has not been reported systematically in the
+vision-based gesture-HRI literature.
+2. A quantitative characterisation of the trade-off between command success rate, latency
+and false-activation rate as a function of the rejection strategy (confidence threshold, temporal
+k-of-n voting, wake-gesture gating) and of inference precision, measured on a Jetson Orin Nano
+with recordings replayed offline so that every configuration sees identical input.
+3. Empirical evidence of what public datasets cannot support: the mainstream gesture-
+HRI datasets provide neither a negative class nor recordings of non-command activity, and a
+random frame-level split of a static-gesture dataset overstates accuracy (99.68% against 96.22%
+cross-subject on HANDS).
+4. A cross-subject evaluation with a leave-one-subject-out protocol, a per-subject error analysis
+that is used to choose the command vocabulary, and live tests with ten operators reported by
+operator characteristics known to affect landmark extraction.
+2
+Related Work
+2.1
+Hand-gesture datasets for human–robot interaction
+Hand-gesture datasets are plentiful, but most target general human–computer interaction rather
+than a robot command vocabulary. HaGRID, for instance, provides more than half a million
+images in 18 gesture classes with bounding-box annotations, aimed at applications such as home
+automation, video conferencing and the automotive sector [7].
+Closer to HRI, the HANDS dataset was built specifically for human–robot interaction research
+and consists of spatially and temporally aligned RGB and depth frames. It contains 12 static
+single-hand gestures performed with both the right and the left hand and 3 static two-hand
+gestures; five actors (two female, three male) were recorded against different backgrounds and
+lighting, with 150 RGB and 150 depth frames per gesture, 2,400 of each per actor. Acquisition
+used an intrinsically calibrated Kinect v2, temporal alignment was done offline with a maximum
+distance of 66 ms, and annotations are bounding-box coordinates [1].
+Two methodological consequences of this structure need to be stated openly. First, because
+each gesture is recorded as a static pose, consecutive frames of one recording are near-duplicates; a
+2
+
+===== PAGE 3 =====
+random frame-level split yields an artificially high and uninformative accuracy. We therefore treat
+leave-one-subject-out evaluation as mandatory, and we measure the inflation directly (Section 5.3).
+Second, and more fundamental here, the dataset consists entirely of valid gestures: there is no
+“not a gesture” class and no recording of non-command activity, so it structurally cannot be used
+to measure a false-activation rate.
+Recent work is moving towards vocabularies designed as robot commands. FR-GESTURE
+proposes 12 commands derived from tactical hand signals and refined with experienced first
+responders, giving 3,312 RGB-D pairs from 2 viewpoints and 7 distances, described as the first
+dataset aimed at guiding unmanned ground vehicles by first responders [3]. It is a relevant
+direction but is not used here because access is still restricted and it is a preprint; like the others,
+its evaluation protocol does not cover non-command scenarios.
+2.2
+Gesture recognition systems for robot control
+An early reference combining gesture recognition with real robot programming is MEGURU,
+a ROS-based robot program builder that recognises gestures with an R-FCN object detector
+fine-tuned on a dedicated dataset [2]. We cite it as historical motivation, not as a controlled
+comparison: model, dataset, task and hardware all differ.
+Later work moved to much lighter landmark-based pipelines. A collaborative-robot path-
+definition interface runs recognition on several Jetson Nano units, one per camera, uses MediaPipe
+to localise hand landmarks in RGB images, and was validated with 20 volunteers [4]. On a
+wheeled platform, MediaPipe hand tracking has been used to control the steering direction and
+speed of a ROS-based surveillance car [6]. The most recent work we found runs the whole
+perception–decision–control pipeline locally on a Jetson Orin Nano and on a Raspberry Pi 5 with
+a Hailo accelerator, and evaluates runtime behaviour and interaction reliability systematically [5].
+These works establish edge feasibility. What none of them reports is behaviour outside the
+command condition: none gives a false-activation rate over periods of non-command operation,
+although practical implementations routinely add countermeasures — a confidence threshold, a
+minimum hold time, command debouncing. The mitigations are known in practice; their price
+has not been measured.
+2.3
+Input rejection and the open-set problem
+The problem is one of open-set recognition: the system must decide not only which gesture is
+shown but whether the input is a command gesture at all. The strongest evidence of how hard
+this is comes from myoelectric control, where participants in daily activities triggered command
+classes unintentionally more often than not and confidence-threshold rejection was barely better
+than chance, leading the authors to propose explicit gating with a wake gesture [9]. The SHREC
+2022 track on online detection of heterogeneous gestures, whose sequences interleave gestures
+with non-significant motions and whose evaluation includes latency and false positives, likewise
+concluded that recognition errors still need to be reduced [8].
+As far as we have found, these strategies have not been compared directly, on the same
+hardware, in one measurement framework applied to robot control. That comparison is the core
+of our second contribution.
+2.4
+Deployment-oriented evaluation on edge devices
+A methodologically relevant line of work evaluates models under real deployment conditions
+rather than laboratory benchmarks. The latency-aware framework above shows that conventional
+protocols ignore the gap between sensing and output [11]. On the hardware side, a study of long-
+term visual inference on a Raspberry Pi 4B found that thermal throttling degrades throughput,
+that throughput varies with ambient temperature when no active cooling is used, and that active
+cooling prevents throttling at the cost of fan power [12]. A characterisation of a Jetson AGX
+3
+
+===== PAGE 4 =====
+Orin in an outdoor enclosure observed thermal throttling under a synthetic stress test at +40 ◦C
+ambient, though not under its inference workload [13]. Both support reporting thermal conditions
+explicitly.
+Inference precision is a secondary variable in this work, not a contribution. Current TensorRT
+releases support NVIDIA hardware with compute capability SM 7.5 or higher [10], so our precision
+results do not generalise to boards outside that range.
+2.5
+Summary of the gap
+Three statements follow. Real-time gesture recognition on edge devices has been shown repeat-
+edly [4, 5] and is no longer a gap worth claiming. Those systems are evaluated exclusively under
+the command condition, while evidence from related domains shows that such systems are most
+fragile under the non-command condition and that the usual rejection mechanism is weak when
+tested [8, 9]. And the public gesture-HRI datasets structurally lack the data needed to measure
+this kind of failure [1, 3, 7]. This work sits at the intersection of the three.
+3
+Hypotheses and Objectives
+3.1
+Hypotheses
+H1–H3 are the main hypotheses; H4 and H5 check design choices.
+H1 — Closed-set accuracy does not predict operational reliability. A baseline with
+no rejection reaches high closed-set accuracy yet produces a false-activation rate greater than zero
+per minute during non-command activity.
+H2 — Temporal rejection beats confidence rejection. At matched command success
+rate, temporal k-of-n voting lowers the false-activation rate more than a single confidence threshold.
+The hypothesis follows from the myoelectric finding that confidence-based rejection is close to
+chance for out-of-set input [9].
+H3 — Wake-gesture gating trades reliability for speed. Requiring a wake gesture
+before a motion command is accepted gives the lowest false-activation rate of all strategies tested,
+at the cost of higher latency and lower command success rate. No strategy dominates; what can
+be characterised is the trade-off curve.
+H4 — Inference precision matters little for reliability. Precision (FP32, FP16, INT8)
+affects inference latency and power, but its effect on the false-activation rate is much smaller than
+the effect of the rejection strategy.
+H5 — Random splits overstate accuracy. Leave-one-subject-out accuracy is meaningfully
+lower than random frame-split accuracy on HANDS, because consecutive frames of a static-gesture
+recording are near-duplicates.
+4
+
+===== PAGE 5 =====
+3.2
+Objectives and success criteria
+Target
+Success criterion
+S1
+Pipeline runs fully on the
+Orin Nano, offline
+Stable for at least 30 consecutive minutes,
+temperature and clock logged throughout
+S2
+Cross-subject baseline
+Leave-one-subject-out accuracy on HANDS with
+mean, standard deviation and per-class confusion
+matrix
+S3
+Non-command corpus
+At least 50 minutes of non-command activity from 10
+operators, with a documented, repeatable activity
+script
+S4
+Command trial set
+At least 500 trials (10 operators × 5 commands × 10
+repetitions) with cue and decision timestamps
+S5
+Trade-off map
+False-activation versus success-rate curves for every
+rejection strategy × precision, from offline replay of
+the same recordings
+S6
+Reproducible reporting
+JetPack and TensorRT versions, power mode, ambient
+temperature and thermal state reported; code and
+evaluation scripts released
+This work does not aim at the highest accuracy or at a new model architecture. S5 is the core
+contribution; the other targets support it. S2 is met (Section 5).
+4
+System and Method
+4.1
+Architecture
+The system has five sequential layers (Table 1) and an instrumentation path that timestamps
+every stage with one monotonic clock, so that stage latencies can be subtracted from one another.
+The separation of the decision layer (L4) from the classifier (L3) is deliberate and strict: the
+classifier outputs a full probability distribution over classes and nothing else, and all rejection
+logic lives in L4. This is what allows every rejection strategy to be evaluated without retraining
+and without re-recording.
+Table 1: Processing layers.
+Layer
+Component
+Detail
+L1
+Image acquisition
+USB webcam, 640 × 480 at 30 fps
+L2
+Landmark extraction
+MediaPipe hand landmarker, 21 keypoints × 3 coordinates,
+translated to the wrist and scaled by the largest
+wrist-to-keypoint distance
+L3
+Classification
+Multilayer perceptron 63 →64 →32 →15, ReLU, softmax
+output (6,671 parameters)
+L4
+Decision / rejection
+V0 baseline, V1 threshold, V2 k-of-n voting, V3
+wake-gesture gating — the experimental variable
+L5
+Actuation
+On-screen command text with a watchdog (no physical
+robot)
+4.2
+Hardware and simulated actuation
+The compute platform is an NVIDIA Jetson Orin Nano 8 GB, a board within the hardware range
+of current TensorRT releases [10], on which the FP32/FP16/INT8 sweep is to be run [pending:
+confirm INT8 engine build on the device]. The sensor is a USB webcam at 640 × 480 and 30 fps,
+deliberately a commodity device rather than the Kinect-class RGB-D sensor used to acquire
+5
+
+===== PAGE 6 =====
+HANDS; the resulting domain gap between training data and inference conditions is stated and
+measured, not avoided. JetPack version and power mode: [pending: record after the board is set
+up; the power mode is locked for the whole study].
+No physical robot is used. The command vocabulary is that of a differential-drive robot,
+but actuation is simulated: the accepted command is shown as text on a display attached to the
+Jetson (“Moving forward”, “Stop”, . . . ). This is sufficient for the questions asked here, because
+every headline metric concerns whether L4 makes the right decision at the right time, not what
+executes it. It also has a cost that we state as a limitation: mechanical actuation delay is not
+measured, and nothing in this paper demonstrates behaviour of a moving platform.
+A watchdog is part of L5 regardless of the L4 variant: if no valid command has been accepted
+for a set timeout, the display reverts to the idle state (“Stop”). It bounds how long a single
+spurious decision stays in effect, and all metrics are computed on the display output with the
+watchdog active.
+4.3
+Command vocabulary
+Five commands are used: forward, backward, turn left, turn right and stop. “No command” is
+not a trained class — no public dataset provides examples of it (Section 2.1) — and is produced
+by L4, not by L3.
+The classifier is trained on all 15 gesture labels present in the HANDS annotation files. Five
+are mapped to commands, one serves as the wake gesture for V3, and the remaining nine are
+mapped to the idle text, which is functionally the same as rejecting them. The mapping was
+chosen from the per-subject confusion matrices rather than from class names; the analysis and the
+resulting choice are reported in Section 5.5. Figure 1 shows the vocabulary.
+Figure 1: The 15 HANDS gesture labels and their role. Blue: command; orange: wake gesture;
+grey: no command (displays “Stop”).
+6
+
+===== PAGE 7 =====
+4.4
+Decision layer
+L4 receives the stream of probability vectors from L3 and decides, per frame, whether to accept a
+class or reject. No strategy reads the clock; the timestamp is passed in, which makes offline replay
+reproduce live decisions exactly.
+V0 — baseline. Every frame is accepted as its most probable class. Not intended for use; it
+measures the size of the problem (H1).
+V1 — confidence threshold. Accept only if the top probability is at least τ.
+V2 — temporal voting. Accept a class only if it is the most probable class in at least k of the
+last n frames, with k > n/2 so that at most one class can hold a quorum.
+V3 — wake-gesture gating. Locked until the wake gesture is recognised; then commands are
+accepted for a fixed window before the system locks again. The wake gesture itself never
+produces a command, which isolates the cost of gating from that of a threshold or a vote [9].
+Frames with no hand. In a non-command session most frames contain no detectable hand,
+so L3 produces nothing. Every strategy rejects such a frame, but temporal state still advances: in
+V2 the frame occupies a slot in the window as an empty vote, so votes cast before a gap cannot
+combine with votes after it, and in V3 the armed window keeps running on the clock.
+4.5
+Record once, evaluate many
+The number of configurations (four strategies × parameter sweeps × three precisions) cannot
+be tested live with participants. Acquisition and evaluation are therefore separated. During a
+session the system records, for every frame, the capture time, the time at which the classifier
+output became available, whether a hand was found, and the full probability vector — never
+only the predicted class, since that would make alternative rejection configurations impossible to
+reconstruct. All L4 configurations are then replayed over the identical recording, so configurations
+differ only in the rejection logic.
+4.6
+Metrics
+Metrics are computed on what the actuator displays.
+False activations per minute (headline). An activation is a change of the display to a move-
+ment text from a different text. The rate is the number of activations in non-command sessions
+divided by their duration.
+Active fraction. The share of non-command time during which a movement text is displayed.
+It exposes a strategy that activates once and stays active, which the count alone under-reports.
+Command success rate. A trial succeeds if, within its window, L4 accepts the intended class
+at least once and never accepts a class that displays a different movement command.
+Decision latency. Time from the trial cue to the first accepted intended class. For V3 the
+window includes the wake gesture, so its cost is part of this figure.
+Cross-subject accuracy. Leave-one-subject-out accuracy on HANDS.
+Inference latency, power, temperature. L2+L3 compute time, board power and CPU/GPU
+temperature over the session (H4).
+Latency is measured after warm-up, at steady state, with mean and standard deviation across
+sessions and with software versions, power mode and ambient temperature recorded [12, 13].
+7
+
+===== PAGE 8 =====
+4.7
+Data collection protocol
+Ten operators take part, each in two counterbalanced blocks.
+• Command block. Five commands × ten repetitions, 50 trials per operator, 500 in total.
+[Open protocol decision: V3 needs the wake gesture inside the trial, while V0–V2 latency
+should not include it. Either record each trial in two conditions (with and without wake) or
+store a separate cue time for the wake and for the command.]
+• Non-command block. Five minutes of natural activity in the camera’s field of view following
+a standard script: talking while gesturing, walking past, adjusting clothing, signalling to
+someone outside the frame, handling a phone. About 50 minutes in total.
+Recruitment aims at variety in skin tone, handedness, sleeve length and use of glasses, which are
+known to affect landmark extraction. With ten participants the breakdown by these characteristics
+is descriptive and no statistical significance is claimed. All participants give written consent before
+recording.
+5
+Results
+5.1
+Dataset as read
+We counted the dataset ourselves rather than relying on the published summary. The release
+contains 12,000 RGB frames (2,400 per actor) labelled with 15 gesture names. Twelve of them are
+annotated with two bounding boxes per frame, one per hand performing the same gesture; the
+three two-arm gestures (Collab, XSign, TimeOut) have one combined box. One gesture, Horiz,
+has 300 frames per actor instead of 150. Treating each box as a sample gives 21,750 hand crops,
+with the two-hand classes contributing about twice as many samples as the three combined-box
+classes; training uses a class-weighted loss to compensate. Only the RGB channel is used.
+One defect in the release had to be worked around: the image path stored in each subject’s
+annotation file points to the folder of the next subject. We use only the file name and pair it with
+the correct subject.
+5.2
+Landmark detection
+The landmarker found a hand in 21,699 of 21,750 crops (99.77%). Of the 51 failures, 48 come
+from Subject 3, whose hands are the smallest in the image.
+5.3
+H5: leave-one-subject-out versus a random frame split
+Table 2 and Figure 2 compare the two protocols with the same model, hyperparameters and seed;
+only the way folds are drawn differs. Both use five folds and therefore the same 80/20 proportion.
+Table 2: Closed-set accuracy under the two split protocols.
+Protocol
+Fold 1
+Fold 2
+Fold 3
+Fold 4
+Fold 5
+Mean
+Std
+Leave-one-subject-out
+99.68
+95.54
+90.19
+96.00
+99.70
+96.22
+3.90
+Random frame split
+(five random folds)
+99.68
+0.08
+H5 is supported. The random split reports 99.68% and the cross-subject protocol 96.22%,
+a gap of 3.46 percentage points. In terms of error the difference is 0.32% against 3.78%: the
+random split hides an error rate 11.7 times higher. It also hides the variation that matters for
+deployment — its standard deviation across folds is 0.08 points, against 3.90 across subjects —
+because every random fold contains near-duplicates of its own training frames. With five subjects
+8
+
+===== PAGE 9 =====
+Figure 2: Accuracy per held-out subject against the accuracy a random frame split reports.
+the cross-subject estimate is itself coarse; the result shows the direction and rough size of the
+inflation, not a precise population value.
+5.4
+Where the cross-subject error is
+The 96.22% mean also supports the first half of H1: closed-set accuracy without any rejection is
+high. The error that remains is not spread evenly (Figures 3 and 4).
+Figure 3: Recall per class and held-
+out subject. Blue labels are commands,
+orange the wake gesture.
+Figure 4: Confusion matrix aggregated over the five
+folds, in percent per row.
+The Subject 3 outlier is one gesture. That fold scores 90.19%, and 253 of its 422 errors
+are the class Four, which is recognised only 15.7% of the time for this subject and at least 95.7%
+for every other. Four differs from Five only in the thumb, and this subject performs Four with the
+thumb extended, so it is read as Five or Six. With Four excluded, the fold’s accuracy is 95.78%.
+The outlier is thus a difference in how one person performs one gesture, which a random split
+cannot reveal.
+Two-arm gestures are unreliable through a single-hand landmarker. Collab, XSign
+and TimeOut are annotated as one box containing both arms, but the landmarker returns one
+9
+
+===== PAGE 10 =====
+hand, and subjects perform them differently (crossed fists versus crossed open hands). Recall for
+XSign falls to 42.0% on one fold and for TimeOut to 0.0% on another.
+5.5
+Choosing the vocabulary from the confusion data
+The initial vocabulary, chosen by inspecting one example per class, used One, Two, Three, Four
+and Five as commands and XSign as the wake gesture. The analysis above argues against two of
+those choices, and the vocabulary was revised before any participant was recorded:
+• “Turn right” moved from Four (81.1% recall) to Nine (99.5%, and at least 97.3% on
+every fold). As a non-command, Four’s confusion with Five and Six no longer matters, since
+all three display “Stop”.
+• The wake gesture moved from XSign (84.0% recall, 42.0% worst fold) to Span
+(99.5% recall, 99.9% precision, at least 97.3% on every fold). A wake gesture the classifier often
+misses would inflate the measured cost of gating in H3 for a reason unrelated to gating.
+Counting a prediction as correct when it displays the same command as the true class,
+command-level accuracy rises from 97.81% to 99.34%, i.e. the command-level error falls from
+2.19% to 0.66%. Two caveats apply. The selection and the reported improvement use the same
+five subjects, so the figure is optimistic. And recall on HANDS says nothing about how often
+a gesture resembles natural hand movement; whether Span is rarely produced by accident can
+only be established on the non-command corpus, where the wake class can be re-evaluated offline
+because it is an L4 parameter.
+5.6
+Open-set results
+The replay engine and its metrics are implemented and unit-tested on synthetic sessions. The
+measurements themselves require the recorded sessions.
+Table 3: Open-set results per strategy at its selected operating point. [pending: all cells]
+Strategy
+False act./min
+Active fraction
+Success rate
+Median latency (s)
+V0 baseline
+–
+–
+–
+–
+V1 threshold (τ = –)
+–
+–
+–
+–
+V2 voting (k/n = –)
+–
+–
+–
+–
+V3 wake gate (window = –)
+–
+–
+–
+–
+• H1, second half: [pending: false-activation rate of V0 over the non-command corpus].
+• H2: [pending: false-activation rate of V1 and V2 at matched command success rate; trade-off
+curves].
+• H3: [pending: false-activation rate, success rate and latency of V3 against the others].
+• H4: [pending: latency, power and false-activation rate for FP32, FP16 and INT8].
+• Breakdown by operator characteristics: [pending: descriptive table].
+6
+Discussion
+The results available so far concern the measurement method more than the system. A random
+frame split of a static-gesture dataset reported an error rate 11.7 times lower than the cross-subject
+protocol on the same model. Since that split is the default in much practical work, accuracy
+figures obtained with it on this kind of data should not be compared with cross-subject figures.
+10
+
+===== PAGE 11 =====
+The per-subject analysis shows that an aggregate accuracy conceals which gestures fail and for
+whom. One subject’s way of holding the thumb accounted for most of the worst fold’s error. For
+a command interface this is a design input: gestures that differ from another gesture in a single
+finger, or that depend on both arms being interpreted by a single-hand model, are poor commands
+however well they score on average. Choosing the vocabulary from per-subject confusion is
+inexpensive and, here, removed about two thirds of the command-level error before any rejection
+logic was applied.
+None of this addresses the question the paper is about. High closed-set accuracy, even measured
+across subjects, is a statement about frames that contain a valid gesture. [pending: discussion
+of the open-set results: size of the baseline false-activation rate, which strategy is preferable at
+which operating point, and what the wake gate costs].
+6.1
+Limitations
+1. No physical robot. Actuation is simulated as on-screen text. Mechanical delay is not
+measured and no claim is made about a moving platform.
+2. Static gestures only. Dynamic, trajectory-based gestures are out of scope.
+3. Sensor domain gap. The classifier is trained on Kinect v2 RGB frames and used with a USB
+webcam.
+4. Crop versus full frame. Training features come from landmarks detected in bounding-box
+crops; live features come from full frames. For the same hand pose the normalised landmarks
+differ by about 0.05 on average, more at the fingertips.
+5. Five training subjects. Cross-subject figures are coarse, and the vocabulary was selected on
+the same subjects used to report its benefit.
+6. Precision results are Orin-specific and do not transfer to boards without INT8 support.
+7. Ten participants are enough for an engineering characterisation, not for statistical inference
+about operator subgroups.
+8. Scripted negatives. The non-command corpus follows a script and is a proxy for uncontrolled
+activity; the reported false-activation rate should be read as a lower bound.
+7
+Conclusion
+[pending: to be written once the open-set results exist. What can be said now: on HANDS, a
+random frame split overstates accuracy (99.68% against 96.22% cross-subject), the cross-subject
+error is concentrated in a few gestures and subjects, and selecting commands from per-subject
+confusion reduces command-level error from 2.19% to 0.66%.]
+References
+[1] C. Nuzzi, S. Pasinetti, R. Pagani, G. Coffetti, and G. Sansoni, “HANDS: an RGB-D dataset
+of static hand-gestures for human-robot interaction,” Data in Brief, vol. 35, art. 106791, 2021,
+doi:10.1016/j.dib.2021.106791.
+[2] C. Nuzzi, S. Pasinetti, R. Pagani, S. Ghidini, M. Beschi, G. Coffetti, and G. Sansoni, “MEGURU: a
+gesture-based robot program builder for Meta-Collaborative workstations,” Robotics and Computer-
+Integrated Manufacturing, vol. 68, art. 102085, 2021, doi:10.1016/j.rcim.2020.102085.
+[3] K. Foteinos, G. Angelidis, A. Psiris, V. Argyriou, P. Sarigiannidis, and G. Th. Papadopoulos, “FR-
+GESTURE: An RGBD dataset for gesture-based human-robot interaction in first responder operations,”
+arXiv:2602.17573, 2026.
+11
+
+===== PAGE 12 =====
+[4] A. Vysocký, T. Poštulka, J. Chlebek, T. Kot, J. Maslowski, and S. Grushko, “Hand gesture interface for
+robot path definition in collaborative applications: implementation and comparative study,” Sensors,
+vol. 23, no. 9, art. 4219, 2023, doi:10.3390/s23094219.
+[5] N. Ivačko, I. Ćirić, and M. Simonović, “Edge computing approach to AI-based gesture for human–robot
+interaction and control,” Computers, vol. 15, no. 4, art. 241, 2026, doi:10.3390/computers15040241.
+[6] C. D. Allena, R. C. De Leon, and Y.-H. Wong, “Easy hand gesture control of a ROS-car using Google
+MediaPipe for surveillance use,” in HCI in Business, Government and Organizations (HCII 2022),
+Lecture Notes in Computer Science, vol. 13327, Springer, 2022, pp. 247–260, doi:10.1007/978-3-031-
+05544-7_19.
+[7] A. Kapitanov, K. Kvanchiani, A. Nagaev, R. Kraynov, and A. Makhliarchuk, “HaGRID – HAnd
+Gesture Recognition Image Dataset,” in Proc. IEEE/CVF Winter Conference on Applications of
+Computer Vision (WACV), 2024, pp. 4572–4581, doi:10.1109/WACV57701.2024.00451.
+[8] M. Emporio, A. Caputo, A. Giachetti, M. Cristani, G. Borghi, A. D’Eusanio, M.-Q. Le, H.-D. Nguyen,
+M.-T. Tran, F. Ambellan, M. Hanik, E. Nava-Yazdani, and C. von Tycowicz, “SHREC 2022 track
+on online detection of heterogeneous gestures,” Computers & Graphics, vol. 107, pp. 241–251, 2022,
+doi:10.1016/j.cag.2022.07.015.
+[9] E. Eddy, E. Campbell, S. Bateman, and E. Scheme, “On-demand myoelectric control using wake
+gestures to eliminate false activations during activities of daily living,” arXiv:2402.10050, 2024.
+Published in revised form as “EMG-based wake gestures eliminate false activations during out-of-set
+activities of daily living: an online myoelectric control study,” Journal of Neural Engineering, vol. 22,
+no. 1, art. 016006, 2025, doi:10.1088/1741-2552/ada4df.
+[10] NVIDIA,
+“TensorRT
+Support
+Matrix,”
+online
+documentation,
+https://docs.nvidia.com/
+deeplearning/tensorrt/latest/getting-started/support-matrix.html (accessed 1 October
+2026).
+[11] J. Chu, R. Zhang, C. Yang, Z. Yu, Z. Bu, H. Liu, F. Röhrbein, A. Knoll, G. Chen, and C. Jiang,
+“Bridging the latency gap with a continuous stream evaluation framework in event-driven perception,”
+Nature Communications, vol. 17, art. 2441, 2026, doi:10.1038/s41467-026-70240-6.
+[12] T. Benoit-Cattin, D. Velasco-Montero, and J. Fernández-Berni, “Impact of thermal throttling on
+long-term visual inference in a CPU-based edge device,” Electronics, vol. 9, no. 12, art. 2106, 2020,
+doi:10.3390/electronics9122106.
+[13] R. Krišlauks, D. Tiscenko, V. Medvedevs, J. Ormanis, and J. Judvaitis, “Ambient temperature impact
+on the thermal behavior and power consumption of the NVIDIA Jetson AGX Orin in an outdoor
+enclosure,” Electronics, vol. 15, no. 11, art. 2467, 2026, doi:10.3390/electronics15112467.
+12
