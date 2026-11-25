@@ -1,0 +1,69 @@
+{
+  "subjects": {
+    "1": {
+      "rgb_frames": 2400,
+      "depth_frames": 2400,
+      "zip_rgb_exists": true,
+      "zip_depth_exists": true
+    },
+    "2": {
+      "rgb_frames": 2400,
+      "depth_frames": 2400,
+      "zip_rgb_exists": true,
+      "zip_depth_exists": true
+    },
+    "3": {
+      "rgb_frames": 2400,
+      "depth_frames": 2400,
+      "zip_rgb_exists": true,
+      "zip_depth_exists": true
+    },
+    "4": {
+      "rgb_frames": 2400,
+      "depth_frames": 2400,
+      "zip_rgb_exists": true,
+      "zip_depth_exists": true
+    },
+    "5": {
+      "rgb_frames": 2400,
+      "depth_frames": 2400,
+      "zip_rgb_exists": true,
+      "zip_depth_exists": true
+    }
+  },
+  "total_rgb_frames": 12000,
+  "total_depth_frames": 12000,
+  "total_hand_crops": 21750,
+  "total_rows": 12000,
+  "label_crops": {
+    "Span_VFR": 750,
+    "Horiz_HFL": 750,
+    "Five_VFR": 750,
+    "Five_VFL": 750,
+    "One_VFR": 750,
+    "One_VFL": 750,
+    "Four_VFR": 750,
+    "Four_VFL": 750,
+    "Nine_VFR": 750,
+    "Nine_VFL": 750,
+    "Horiz_HFR": 750,
+    "Span_VFL": 750,
+    "Horiz_HBL": 750,
+    "Two_VFR": 750,
+    "Two_VFL": 750,
+    "Seven_VFR": 750,
+    "Seven_VFL": 750,
+    "Eight_VFR": 750,
+    "Eight_VFL": 750,
+    "Six_VFR": 750,
+    "Six_VFL": 750,
+    "Collab": 750,
+    "rgb": 750,
+    "depth": 750,
+    "Three_VFR": 750,
+    "Three_VFL": 750,
+    "Punch_VFR": 750,
+    "Punch_VFL": 750,
+    "Horiz_HBR": 750
+  }
+}

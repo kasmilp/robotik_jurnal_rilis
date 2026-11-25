@@ -1,0 +1,8 @@
+{
+  "model": "hand_landmarker.task",
+  "pad_frac": 1.0,
+  "conf": 0.5,
+  "num_hands": 2,
+  "total_crops": 21750,
+  "detected": 18246
+}

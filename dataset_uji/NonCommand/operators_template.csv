@@ -1,0 +1,23 @@
+# Template CSV — Operator (D2/D3)
+
+Isi satu baris per operator; data ini dipakai untuk tabel deskriptif (Section 4.7).
+
+```csv
+operator_id,handedness,skin_tone,sleeve_length,glasses
+OP01,right,medium,medium,no
+OP02,left,dark,long,yes
+OP03,right,light,short,no
+OP04,right,medium,medium,yes
+OP05,left,dark,short,no
+OP06,right,light,long,no
+OP07,right,medium,medium,yes
+OP08,left,light,medium,no
+OP09,right,dark,long,no
+OP10,right,medium,short,no
+```
+
+Catatan:
+- `handedness` = tangan dominan (right/left)
+- `skin_tone` = light/medium/dark (deskriptif)
+- `sleeve_length` = pendek/sedang/panjang
+- `glasses` = ya/tidak

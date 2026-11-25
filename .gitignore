@@ -1,0 +1,16 @@
+# Data mentah HANDS (besar, bisa diunduh ulang dari Mendeley)
+dataset_uji/HANDS/RGB/
+dataset_uji/HANDS/Depth/
+dataset_uji/HANDS/extracted/
+
+# File besar / sementara
+*.zip
+*.tgz
+*.tar.gz
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Model bundle MediaPipe (besar, tidak perlu versi)
+dataset_uji/HANDS/scripts/models/
